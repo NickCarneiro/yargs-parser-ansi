@@ -1,8 +1,10 @@
-/* global beforeEach, describe, it */
+/* global beforeEach, describe, it, xit */
 
 require('chai').should()
 
 const { expect } = require('chai')
+const util = require('util')
+const exec = util.promisify(require('child_process').exec)
 const fs = require('fs')
 const parser = require('../build/index.cjs')
 const path = require('path')
@@ -3613,6 +3615,94 @@ describe('yargs-parser', function () {
 
       const args8 = parser("--foo $'text \\0 \\001 with \\12 \\123 \\129 octal'")
       args8.foo.should.equal('text \u0000 \u0001 with \u000A \u0053 \u000A9 octal')
+    })
+
+    function hexEncode (s) {
+      let hex
+      let result = ''
+      for (let i = 0; i < s.length; i++) {
+        hex = s.charCodeAt(i).toString(16)
+        result += ('000' + hex).slice(-4)
+      }
+      return result
+    }
+
+    async function check (ansiString, encoding = 'utf8') {
+      const result = parser(['--foo', ansiString]).foo + '' // convert integers back to str
+      const resultBuffer = Buffer.from(result, encoding)
+
+      const { stdout } = await exec(
+        'printf "%s" ' + ansiString,
+        { shell: '/bin/bash', encoding: 'buffer' }
+      )
+      if (!resultBuffer.equals(stdout)) {
+        console.log(JSON.stringify(ansiString), hexEncode(result), result.length, resultBuffer, resultBuffer.length, stdout, stdout.length)
+      }
+      resultBuffer.should.deep.equal(stdout)
+    }
+
+    async function checkAll (prefix, value, maxLength, encoding = 'utf8') {
+      await check("$'\\" + prefix + value + "'", encoding)
+      while (value.length < maxLength) {
+        value = '0' + value
+        await check("$'\\" + prefix + value + "'", encoding)
+        if (value.toLowerCase() !== value) {
+          await check("$'\\" + prefix + value.toLowerCase() + "'", encoding)
+        }
+      }
+    }
+
+    // This passes
+    xit('parses all octal codes in ANSI-C quoted strings like bash', async () => {
+      for (let i = 0; i <= 0o777; i++) {
+        if (i % 256 === 0) { // null character
+          continue
+        }
+        await checkAll('', i.toString(8), 3, 'ascii')
+      }
+    }).timeout(5000)
+
+    // This passes
+    xit('parses all hex codes in ANSI-C quoted strings like bash', async () => {
+      for (let i = 1; i <= 0xFF; i++) { // start at 1 to skip null
+        await checkAll('x', i.toString(16), 2, 'ascii')
+      }
+
+      for (let i = 1; i <= 0xFFFF; i++) {
+        // The high and low surrogates "\ud800" to "\udfff" fail this test
+        // because when the resulting string is encoded to a Buffer with UTF-8,
+        // it becomes a "?" replacement character, but the underlying data is correct.
+        // https://en.wikipedia.org/wiki/UTF-16#U+D800_to_U+DFFF
+        if (i >= 0xD800 && i <= 0xDFFF) {
+          continue
+        }
+        await checkAll('u', i.toString(16), 4)
+      }
+
+      for (let i = 1; i <= 0x10FFFF; i++) {
+        if (i >= 0xD800 && i <= 0xDFFF) {
+          continue
+        }
+        await checkAll('U', i.toString(16), 8)
+      }
+
+      // TODO: echo -n $'\U110000' produces f4 90 80 80 but String.fromCodePoint(0x110000)
+      // raises an error in node: Uncaught RangeError: Invalid code point 1114112
+    }).timeout(6000 * 1000)
+
+    // This fails on the first case
+    // "$'\\c\u0001'" ffa1 1 <Buffer 01 01> 2
+    xit('parses all control codes in ANSI-C quoted strings like bash', async () => {
+      for (let i = 1; i <= 0x10FFFF; i++) {
+        await check("$'\\c" + String.fromCodePoint(i) + "'")
+      }
+    }).timeout(300 * 1000)
+
+    // This fails
+    // "$'\\c\\ '" fffc0020 2 <Buffer 1c 20> 2
+    xit('lets a control code literal eat a backslash in ANSI-C quoted strings', async () => {
+      const testCase = "$'\\c\\ '"
+      await check(testCase)
     })
   })
 
