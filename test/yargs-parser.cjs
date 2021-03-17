@@ -3587,6 +3587,33 @@ describe('yargs-parser', function () {
       args.foo.should.equal('-hello world')
       args.bar.should.equal('--goodnight moon')
     })
+
+    it('handles bash ANSI-C quoted strings', () => {
+      const args = parser("--foo $'text with \\n newline'")
+      args.foo.should.equal('text with \n newline')
+
+      // Double quotes shouldn't work
+      const args2 = parser('--foo $"text without \\n newline"')
+      args2.foo.should.equal('$"text without \\n newline"')
+
+      const characters = '\\\\' + '\\a' + '\\b' + '\\e' + '\\E' + '\\f' + '\\n' + '\\r' + '\\t' + '\\v' + "\\'" + '\\"' + '\\?'
+      const args3 = parser("--foo $'" + characters + "'")
+      args3.foo.should.equal('\\\a\b\u001b\u001b\f\n\r\t\v\'"?') // eslint-disable-line
+
+      const args4 = parser("--foo $'text \\xFFFF with \\xFF hex'")
+      args4.foo.should.equal('text \u00FFFF with \u00FF hex')
+      const args5 = parser("--foo $'text \\uFFFFFF\\uFFFF with \\uFF hex'")
+      args5.foo.should.equal('text \uFFFFFF\uFFFF with \u00FF hex')
+      const args6 = parser("--foo $'text \\U10FFFF\\UFFFF with \\U00FF hex'")
+      const longCodePoint = String.fromCodePoint(0x10FFFF)
+      args6.foo.should.equal(`text ${longCodePoint}\uFFFF with \u00FF hex`)
+
+      const args7 = parser("--foo $'text \\cAB \\cz with \\c12 control \\c011 chars'")
+      args7.foo.should.equal('text \u0001B \u001A with \u00112 control \u001011 chars')
+
+      const args8 = parser("--foo $'text \\0 \\001 with \\12 \\123 \\129 octal'")
+      args8.foo.should.equal('text \u0000 \u0001 with \u000A \u0053 \u000A9 octal')
+    })
   })
 
   // see: https://github.com/yargs/yargs-parser/issues/144

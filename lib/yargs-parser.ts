@@ -600,11 +600,14 @@ export class YargsParser {
 
     function processValue (key: string, val: any) {
       // strings may be quoted, clean this up as we assign values.
-      if (typeof val === 'string' &&
-        (val[0] === "'" || val[0] === '"') &&
-        val[val.length - 1] === val[0]
-      ) {
-        val = val.substring(1, val.length - 1)
+      if (typeof val === 'string') {
+        if ((val[0] === "'" || val[0] === '"') &&
+          val[val.length - 1] === val[0]
+        ) {
+          val = val.substring(1, val.length - 1)
+        } else if (val.slice(0, 2) === "$'" && val[val.length - 1] === "'") {
+          val = parseAnsiCQuote(val.substring(2, val.length - 1))
+        }
       }
 
       // handle parsing boolean arguments --foo=true --bar false.
@@ -627,6 +630,59 @@ export class YargsParser {
         else value = mixin.normalize(val)
       }
       return value
+    }
+
+    // ANSI-C quoted strings are a bash-only feature and have the form $'some text'
+    // https://www.gnu.org/software/bash/manual/html_node/ANSI_002dC-Quoting.html
+    function parseAnsiCQuote (str: string): string {
+      function unescapeChar (x: string): string {
+        switch (x.slice(0, 2)) {
+          case '\\\\':
+            return '\\'
+          case '\\a':
+            return '\a' // eslint-disable-line
+          case '\\b':
+            return '\b'
+          case '\\e':
+            return '\u001b'
+          case '\\E':
+            return '\u001b'
+          case '\\f':
+            return '\f'
+          case '\\n':
+            return '\n'
+          case '\\r':
+            return '\r'
+          case '\\t':
+            return '\t'
+          case '\\v':
+            return '\v'
+          case "\\'":
+            return "'"
+          case '\\"':
+            return '"'
+          case '\\?':
+            return '?'
+          case '\\c':
+            // Control codes
+            // "\c1" -> 11, "\c2" -> 12 and so on
+            if (x.match(/\\c[0-9]/)) {
+              return String.fromCodePoint(parseInt(x.slice(2), 10) + 16)
+            }
+            // "\ca" -> 01, "\cb" -> 02 and so on
+            return String.fromCodePoint(x.toLowerCase().charCodeAt(2) - 'a'.charCodeAt(0) + 1)
+          case '\\x':
+          case '\\u':
+          case '\\U':
+            // Hexadecimal character literal
+            return String.fromCodePoint(parseInt(x.slice(2), 16))
+        }
+        // Octal character literal
+        return String.fromCodePoint(parseInt(x.slice(1), 8) % 256)
+      }
+
+      const ANSI_BACKSLASHES = /\\(\\|a|b|e|E|f|n|r|t|v|'|"|\?|[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c.)/gs
+      return str.replace(ANSI_BACKSLASHES, unescapeChar)
     }
 
     function maybeCoerceNumber (key: string, value: string | number | null | undefined) {
